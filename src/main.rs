@@ -103,6 +103,67 @@ async fn product_router(
     .unwrap_or_else(|e| default_error_response(e))
 }
 
+#[tokio::main]
+async fn main() {
+    // Read PORT (platforms like Render set this). Fallback to 3000 for local dev.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+
+    // Bind to 0.0.0.0 so the service is reachable from the host network.
+    let bind_addr = format!("0.0.0.0:{}", port);
+
+    // For printing / usage URLs: prefer DEPLOYMENT_URL if provided (e.g. the public Render URL).
+    // If not provided, use localhost:<port> as the default public URL for local dev.
+    let public_url = std::env::var("DEPLOYMENT_URL")
+        .unwrap_or_else(|_| format!("localhost:{}", port));
+
+    let description: Value = json!({
+        "name": env!("CARGO_PKG_NAME"),
+        "description": env!("CARGO_PKG_DESCRIPTION"),
+        "version": env!("CARGO_PKG_VERSION"),
+        "authors": env!("CARGO_PKG_AUTHORS"),
+        "repository": env!("CARGO_PKG_REPOSITORY"),
+        "license": env!("CARGO_PKG_LICENSE"),
+        "usage": {
+            "search_api": format!("http://{}/search/{{product_name}}", public_url),
+            "product_api": format!("http://{}/product/{{product_link_argument}}", public_url),
+        }
+    });
+
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async move {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from((description).to_string()))
+                    .unwrap()
+            }),
+        )
+        .route("/search/{*query}", get(search_router))
+        .route("/search", get(search_router))
+        .route("/search/", get(search_router))
+        .route("/product/{*url}", get(product_router))
+        .fallback(get(|| async {
+            (StatusCode::PERMANENT_REDIRECT, Redirect::permanent("/")).into_response()
+        }));
+
+    println!("Starting server on bind address {}", bind_addr);
+    println!("Public URL (for docs/usage) = http://{}", public_url);
+
+    // Bind to 0.0.0.0:<PORT>
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .expect("Failed to bind to address");
+
+    // Use axum Server::from_tcp for a TcpListener.
+    axum::Server::from_tcp(listener)
+        .expect("Failed to create server from TcpListener")
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+}
+
 const DEFAULT_DEPLOYMENT_URL: &str = "localhost:3000";
 
 #[tokio::main]
